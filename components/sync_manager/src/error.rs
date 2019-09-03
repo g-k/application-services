@@ -13,6 +13,8 @@ pub enum ErrorKind {
     UnknownEngine(String),
     #[fail(display = "Manager was compiled without support for {:?}", _0)]
     UnsupportedFeature(String),
+    #[fail(display = "Manager doesn't support client command {:?}", _0)]
+    UnsupportedCommand(String),
     #[fail(display = "Database connection for '{}' is not open", _0)]
     ConnectionClosed(String),
     #[fail(display = "Handle is invalid: {}", _0)]

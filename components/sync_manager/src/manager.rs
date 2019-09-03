@@ -2,11 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+use crate::clients;
 use crate::error::*;
 use crate::msg_types::{ServiceStatus, SyncParams, SyncResult};
 use logins::PasswordEngine;
 use places::{bookmark_sync::store::BookmarksStore, history_sync::store::HistoryStore, PlacesApi};
 use std::collections::HashMap;
+use std::result;
 use std::sync::Mutex;
 use std::sync::{atomic::AtomicUsize, Arc, Weak};
 use sync15::MemoryCachedState;
@@ -215,14 +217,17 @@ impl SyncManager {
             tokenserver_url,
         };
 
-        let result = sync15::sync_multiple(
-            &store_refs,
+        let result = sync15::sync_multiple_with_params(
+            sync15::SyncMultipleParams {
+                stores: &store_refs,
+                storage_init: &client_init,
+                root_sync_key: &key_bundle,
+                interruptee: &interruptee,
+                engines_to_state_change: Some(&params.engines_to_change_state),
+            },
             &mut disk_cached_state,
             &mut mem_cached_state,
-            &client_init,
-            &key_bundle,
-            &interruptee,
-            Some(&params.engines_to_change_state),
+            sync_all_stores_with_clients,
         );
 
         let status = ServiceStatus::from(result.service_status) as i32;
@@ -279,4 +284,28 @@ fn check_engine_list(list: &[String], have_engines: &[&str]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn sync_all_stores_with_clients(
+    client: &sync15::Sync15StorageClient,
+    global_state: &sync15::GlobalState,
+    params: sync15::SyncMultipleParams<'_>,
+    sync_result: &mut sync15::SyncResult,
+) -> result::Result<sync15::UpdatePersistedGlobalState, failure::Error> {
+    let clients_engine = clients::Engine {
+        interruptee: params.interruptee,
+        client,
+        global_state,
+        root_sync_key: params.root_sync_key,
+        fully_atomic: true,
+        settings: clients::Settings {
+            fxa_device_id: String::new(),
+            name: String::new(),
+            client_type: clients::Type::Desktop,
+        },
+    };
+    // Note that a clients engine failing to sync is fatal.
+    clients_engine.sync()?;
+    // Now sync the remaining stores.
+    sync15::sync_all_stores(client, global_state, params, sync_result)
 }
