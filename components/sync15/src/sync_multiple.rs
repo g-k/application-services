@@ -72,24 +72,48 @@ pub fn sync_multiple(
     interruptee: &impl Interruptee,
     engines_to_state_change: Option<&HashMap<String, bool>>,
 ) -> SyncResult {
+    let params = SyncMultipleParams {
+        stores,
+        storage_init,
+        interruptee,
+        engines_to_state_change: engines_to_state_change,
+        root_sync_key,
+    };
+    sync_multiple_with_params(
+        params,
+        persisted_global_state,
+        mem_cached_state,
+        sync_all_stores,
+    )
+}
+
+/// Syncs multiple stores, with a function to customize syncing behavior. The
+/// Sync Manager uses this to sync the clients engine first, which is handled
+/// differently than other stores.
+pub fn sync_multiple_with_params(
+    params: SyncMultipleParams<'_>,
+    persisted_global_state: &mut Option<String>,
+    mem_cached_state: &mut MemoryCachedState,
+    sync_stores: impl FnOnce(
+        &Sync15StorageClient,
+        &GlobalState,
+        SyncMultipleParams<'_>,
+        &mut SyncResult,
+    ) -> result::Result<UpdatePersistedGlobalState, failure::Error>,
+) -> SyncResult {
     let mut sync_result = SyncResult {
         service_status: ServiceStatus::OtherError,
         result: Ok(()),
         declined: None,
-        engine_results: HashMap::with_capacity(stores.len()),
+        engine_results: HashMap::with_capacity(params.stores.len()),
         telemetry: telemetry::SyncTelemetryPing::new(),
     };
     match do_sync_multiple(
-        SyncMultipleParams {
-            stores,
-            storage_init,
-            interruptee,
-            engines_to_state_change,
-            root_sync_key,
-        },
+        params,
         persisted_global_state,
         mem_cached_state,
         &mut sync_result,
+        sync_stores,
     ) {
         Ok(()) => {
             log::debug!(
@@ -113,12 +137,12 @@ pub fn sync_multiple(
 // This is just the read-only parameters, to keep the number of lifetime
 // arguments on this struct low. The mutable params are passed separately.
 // (Honestly, this exists mostly to shut clippy up about too many arguments).
-struct SyncMultipleParams<'a> {
-    stores: &'a [&'a dyn Store],
-    storage_init: &'a Sync15StorageClientInit,
-    root_sync_key: &'a KeyBundle,
-    interruptee: &'a dyn Interruptee,
-    engines_to_state_change: Option<&'a HashMap<String, bool>>,
+pub struct SyncMultipleParams<'a> {
+    pub stores: &'a [&'a dyn Store],
+    pub storage_init: &'a Sync15StorageClientInit,
+    pub root_sync_key: &'a KeyBundle,
+    pub interruptee: &'a dyn Interruptee,
+    pub engines_to_state_change: Option<&'a HashMap<String, bool>>,
 }
 
 /// The actual worker for sync_multiple.
@@ -127,6 +151,12 @@ fn do_sync_multiple(
     persisted_global_state: &mut Option<String>,
     mem_cached_state: &mut MemoryCachedState,
     sync_result: &mut SyncResult,
+    sync_stores: impl FnOnce(
+        &Sync15StorageClient,
+        &GlobalState,
+        SyncMultipleParams<'_>,
+        &mut SyncResult,
+    ) -> result::Result<UpdatePersistedGlobalState, failure::Error>,
 ) -> result::Result<(), Error> {
     if params.interruptee.was_interrupted() {
         sync_result.service_status = ServiceStatus::Interrupted;
@@ -218,8 +248,30 @@ fn do_sync_multiple(
     // store failing.
     sync_result.service_status = ServiceStatus::Ok;
 
+    let op = sync_stores(&client_info.client, &global_state, params, sync_result)?;
+    if op == UpdatePersistedGlobalState::Yes {
+        log::info!("Updating persisted global state");
+        mem_cached_state.last_client_info = Some(client_info);
+        mem_cached_state.last_global_state = Some(global_state);
+    }
+    Ok(())
+}
+
+#[derive(Eq, PartialEq)]
+pub enum UpdatePersistedGlobalState {
+    Yes,
+    No,
+}
+
+pub fn sync_all_stores(
+    client: &Sync15StorageClient,
+    global_state: &GlobalState,
+    params: SyncMultipleParams<'_>,
+    sync_result: &mut SyncResult,
+) -> result::Result<UpdatePersistedGlobalState, failure::Error> {
     let mut num_failures = 0;
     let mut telem_sync = telemetry::SyncTelemetry::new();
+
     for store in params.stores {
         let name = store.collection_name();
         if global_state.global.declined.iter().any(|e| e == name) {
@@ -230,8 +282,8 @@ fn do_sync_multiple(
 
         let mut telem_engine = telemetry::Engine::new(name);
         let result = sync::synchronize(
-            &client_info.client,
-            &global_state,
+            client,
+            global_state,
             params.root_sync_key,
             *store,
             true,
@@ -266,7 +318,7 @@ fn do_sync_multiple(
         sync_result.engine_results.insert(name.into(), result);
         if params.interruptee.was_interrupted() {
             sync_result.service_status = ServiceStatus::Interrupted;
-            return Ok(());
+            return Ok(UpdatePersistedGlobalState::No);
         }
     }
 
@@ -274,9 +326,8 @@ fn do_sync_multiple(
     if num_failures == 0 {
         // XXX - not clear if we should really only do this on full success,
         // particularly if it's just a network error. See XXX above for more.
-        log::info!("Updating persisted global state");
-        mem_cached_state.last_client_info = Some(client_info);
-        mem_cached_state.last_global_state = Some(global_state);
+        Ok(UpdatePersistedGlobalState::Yes)
+    } else {
+        Ok(UpdatePersistedGlobalState::No)
     }
-    Ok(())
 }

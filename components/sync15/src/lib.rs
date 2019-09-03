@@ -25,9 +25,12 @@ mod util;
 
 // Re-export some of the types callers are likely to want for convenience.
 pub use crate::bso_record::{BsoRecord, CleartextBso, EncryptedBso, EncryptedPayload, Payload};
-pub use crate::changeset::{IncomingChangeset, OutgoingChangeset, RecordChangeset};
+pub use crate::changeset::{
+    CollectionUpdate, IncomingChangeset, OutgoingChangeset, RecordChangeset,
+};
 pub use crate::client::{SetupStorageClient, Sync15StorageClient, Sync15StorageClientInit};
 pub use crate::coll_state::{CollState, CollSyncIds, StoreSyncAssociation};
+pub use crate::collection_keys::CollectionKeys;
 pub use crate::error::{Error, ErrorKind, Result};
 pub use crate::key_bundle::KeyBundle;
 pub use crate::migrate_state::extract_v1_state;
@@ -35,5 +38,8 @@ pub use crate::request::CollectionRequest;
 pub use crate::state::{GlobalState, SetupStateMachine};
 pub use crate::status::{ServiceStatus, SyncResult};
 pub use crate::sync::{synchronize, Store};
-pub use crate::sync_multiple::{sync_multiple, MemoryCachedState};
+pub use crate::sync_multiple::{
+    sync_all_stores, sync_multiple, sync_multiple_with_params, MemoryCachedState,
+    SyncMultipleParams, UpdatePersistedGlobalState,
+};
 pub use crate::util::{ServerTimestamp, SERVER_EPOCH};
