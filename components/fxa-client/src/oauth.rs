@@ -199,6 +199,11 @@ impl FirefoxAccount {
                 self.state.scoped_keys.insert(scope, scoped_key);
             }
         }
+
+        if resp.session_token.is_some() {
+            self.state.session_token = resp.session_token;
+        }
+
         // We are only interested in the refresh token at this time because we
         // don't want to return an over-scoped access token.
         // Let's be good citizens and destroy this access token.
